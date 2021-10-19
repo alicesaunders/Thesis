@@ -1,0 +1,119 @@
+// Configuration for a coreference resolution model based on:
+//   Lee, Kenton et al. “Higher-order Coreference Resolution with Coarse-to-fine Inference.” NAACL (2018).
+//   + SpanBERT-large
+
+local transformer_model = "SpanBERT/spanbert-base-cased";
+local max_length = 512;
+local feature_size = 20;
+local max_span_width = 30;
+
+local transformer_dim = 768;  # uniquely determined by transformer_model
+local span_embedding_dim = 3 * transformer_dim + feature_size;
+local span_pair_embedding_dim = 3 * span_embedding_dim + feature_size;
+
+{
+  "dataset_reader": {
+    "type": "coref",
+    "token_indexers": {
+      "tokens": {
+        "type": "pretrained_transformer_mismatched",
+        "model_name": transformer_model,
+        "max_length": max_length
+      },
+    },
+    "max_span_width": max_span_width
+  },
+  "validation_dataset_reader": {
+    "type": "coref",
+    "token_indexers": {
+      "tokens": {
+        "type": "pretrained_transformer_mismatched",
+        "model_name": transformer_model,
+        "max_length": max_length
+      },
+    },
+    "max_span_width": max_span_width
+  },
+  "train_data_path": "/content/train",
+  "validation_data_path": "/content/dev",
+  "model": {
+    "type": "adversarial_bias_mitigator",
+    "predictor": {
+      "_pretrained": {
+        "archive_file": "/content/coref_model/model.tar.gz",
+        "module_path": "",
+        "freeze": false
+      }
+    },
+    "adversary": {
+        "type": "feedforward_regression_adversary",
+        "feedforward": {
+            "input_dim": 2,
+            "num_layers": 1,
+            "hidden_dims": 1,
+            "activations": "linear"
+        }
+    },
+    "bias_direction": {
+        "type": "two_means",
+        "seed_word_pairs_file": "https://raw.githubusercontent.com/tolga-b/debiaswe/4c3fa843ffff45115c43fe112d4283c91d225c09/data/definitional_pairs.json",
+        "tokenizer": {
+          "type": "pretrained_transformer",
+          "model_name": transformer_model,
+          "max_length": 512
+        }
+    },
+    "predictor_output_key": "predicted_antecedents_float"
+  },
+  "data_loader": {
+    "batch_sampler": {
+      "type": "bucket",
+      # Explicitly specifying sorting keys since the guessing heuristic could get it wrong
+      # as we a span field.
+      "sorting_keys": ["text"],
+      "batch_size": 1
+    }
+  },
+  "trainer": {
+    "num_epochs": 10,
+    "validation_metric": "+coref_f1",
+    "callbacks": [
+        "adversarial_bias_mitigator_backward"
+    ],
+    "optimizer": {
+        "type": "multi",
+        "optimizers": {
+            "predictor": {
+                "type": "adam",
+                "lr": 1e-5
+            },
+            "adversary": {
+                "type": "adam",
+                "lr": 1e-5
+            },
+            "default": {
+                "type": "adam",
+                "lr": 1e-5
+            }
+        },
+        "parameter_groups": [
+            [
+                [
+                    "^predictor"
+                ],
+                {
+                    "optimizer_name": "predictor"
+                }
+            ],
+            [
+                [
+                    "^adversary"
+                ],
+                {
+                    "optimizer_name": "adversary"
+                }
+            ]
+        ]
+    }
+  }
+}
